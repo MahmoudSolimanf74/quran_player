@@ -1,1 +1,0 @@
-service : { generate_code : () -> (text); validate_code : (text) -> (bool) }

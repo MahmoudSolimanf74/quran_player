@@ -1,5 +1,0 @@
-[workspace]
-members = [
-    "src/test1_backend"
-]
-resolver = "2"

@@ -164,7 +164,7 @@
       "languageVersion": "3.5"
     },
     {
-      "name": "quran_player",
+      "name": "quran_plater",
       "rootUri": "../",
       "packageUri": "lib/",
       "languageVersion": "3.10"

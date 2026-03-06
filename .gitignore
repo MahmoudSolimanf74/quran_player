@@ -1,25 +1,45 @@
-# Various IDEs and Editors
-.vscode/
-.idea/
-**/*~
-
-# Mac OSX temporary files
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
 .DS_Store
-**/.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
 
-# dfx temporary files
-.dfx/
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
 
-# generated files
-**/declarations/
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
 
-# rust
-target/
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
 
-# frontend code
-node_modules/
-dist/
-.svelte-kit/
+# Symbolication related
+app.*.symbols
 
-# environment variables
-.env
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
