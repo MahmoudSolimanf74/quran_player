@@ -11,20 +11,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:quran_plater/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('App shows folder button', (WidgetTester tester) async {
     await tester.pumpWidget(const MusicPlayerApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // look for the floating action button used to pick a folder
+    expect(find.byIcon(Icons.folder_open), findsOneWidget);
   });
 }

@@ -1,11 +1,18 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:io';
 import 'package:path/path.dart' as path;
+
+import 'models/track.dart';
+import 'widgets/library_screen.dart';
+import 'widgets/mini_player.dart';
+import 'widgets/now_playing_screen.dart';
+import 'widgets/player_controls.dart';
 
 void main() {
   runApp(const MusicPlayerApp());
@@ -18,21 +25,21 @@ class MusicPlayerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'مشغل القرآن الكريم',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primaryColor: const Color(0xFF2E7D32), // أخضر داكن
-        scaffoldBackgroundColor: const Color(0xFFF1F8E9), // أخضر فاتح
+        scaffoldBackgroundColor: const Color(0xFF0D0D0D),
+        focusColor: const Color(0xFF8B5CF6),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF2E7D32), // أخضر داكن
           foregroundColor: Colors.white,
           titleTextStyle: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         textTheme: GoogleFonts.amiriTextTheme().copyWith(
-          bodyLarge: GoogleFonts.amiri(
-            color: const Color(0xFF1B5E20),
-          ), // أخضر أغمق
-          bodyMedium: GoogleFonts.amiri(color: const Color(0xFF2E7D32)),
+          bodyLarge: GoogleFonts.amiri(color: Colors.white),
+          bodyMedium: GoogleFonts.amiri(color: Colors.white70),
           titleLarge: GoogleFonts.amiri(
-            color: const Color(0xFF1B5E20),
+            color: Colors.white,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -42,12 +49,26 @@ class MusicPlayerApp extends StatelessWidget {
             foregroundColor: const Color(0xFF2E7D32), // أخضر على الذهبي
           ),
         ),
-        iconTheme: const IconThemeData(color: Color(0xFF2E7D32)),
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
       home: const MusicPlayerHome(),
     );
   }
 }
+
+/// Some pleasant gradients that we cycle through for each track.  Picked
+/// to loosely resemble the neon gradients used in the React demo, but
+/// they also complement the green/gold Quranic theme.
+final List<List<Color>> kGradients = [
+  [const Color(0xFF667EEA), const Color(0xFF764BA2)],
+  [const Color(0xFFFF0844), const Color(0xFFFFB199)],
+  [const Color(0xFF4FACFE), const Color(0xFF00F2FE)],
+  [const Color(0xFF43E97B), const Color(0xFF38F9D7)],
+  [const Color(0xFFFA709A), const Color(0xFFFEED40)],
+  [const Color(0xFF30CFD0), const Color(0xFF330867)],
+  [const Color(0xFFF6D365), const Color(0xFFFDA085)],
+  [const Color(0xFF09203F), const Color(0xFF537895)],
+];
 
 class MusicPlayerHome extends StatefulWidget {
   const MusicPlayerHome({super.key});
@@ -58,10 +79,18 @@ class MusicPlayerHome extends StatefulWidget {
 
 class _MusicPlayerHomeState extends State<MusicPlayerHome> {
   final AudioPlayer _audioPlayer = AudioPlayer();
-  List<File> _audioFiles = [];
+
+  /// playlist derived from the filesystem
+  List<Track> _tracks = [];
+
   int _currentIndex = -1;
   bool _isPlaying = false;
+  bool _isShuffled = false;
+  LoopMode _loopMode = LoopMode.off;
+  Duration _progress = Duration.zero;
+  Duration _duration = Duration.zero;
   String? _selectedDirectory;
+  bool _showNowPlaying = false;
 
   @override
   void initState() {
@@ -70,28 +99,42 @@ class _MusicPlayerHomeState extends State<MusicPlayerHome> {
     _setupAudioPlayerListeners();
   }
 
+  void _setupAudioPlayerListeners() {
+    _audioPlayer.playerStateStream.listen((state) {
+      if (mounted) {
+        setState(() {
+          _isPlaying = state.playing;
+        });
+      }
+    });
+
+    _audioPlayer.currentIndexStream.listen((idx) {
+      if (mounted && idx != null) {
+        setState(() {
+          _currentIndex = idx;
+        });
+      }
+    });
+
+    _audioPlayer.positionStream.listen((pos) {
+      if (mounted) setState(() => _progress = pos);
+    });
+    _audioPlayer.durationStream.listen((dur) {
+      if (mounted && dur != null) setState(() => _duration = dur);
+    });
+
+    _audioPlayer.shuffleModeEnabledStream.listen((enabled) {
+      if (mounted) setState(() => _isShuffled = enabled);
+    });
+    _audioPlayer.loopModeStream.listen((mode) {
+      if (mounted) setState(() => _loopMode = mode);
+    });
+  }
+
   @override
   void dispose() {
     _audioPlayer.dispose();
     super.dispose();
-  }
-
-  void _setupAudioPlayerListeners() {
-    _audioPlayer.playerStateStream.listen((playerState) {
-      if (mounted) {
-        setState(() {
-          _isPlaying = playerState.playing;
-        });
-      }
-    });
-
-    _audioPlayer.currentIndexStream.listen((index) {
-      if (mounted && index != null) {
-        setState(() {
-          _currentIndex = index;
-        });
-      }
-    });
   }
 
   Future<void> _loadSavedDirectory() async {
@@ -140,6 +183,18 @@ class _MusicPlayerHomeState extends State<MusicPlayerHome> {
     }
   }
 
+  Future<Duration?> _getDuration(String filePath) async {
+    final tmp = AudioPlayer();
+    try {
+      await tmp.setFilePath(filePath);
+      return tmp.duration;
+    } catch (_) {
+      return null;
+    } finally {
+      await tmp.dispose();
+    }
+  }
+
   Future<void> _loadFilesFromDirectory(String dirPath) async {
     Directory dir = Directory(dirPath);
     List<FileSystemEntity> entities = dir.listSync(
@@ -164,276 +219,194 @@ class _MusicPlayerHomeState extends State<MusicPlayerHome> {
       }
     }
 
-    // Sort files alphabetically for consistent order
     audioFiles.sort(
       (a, b) => path.basename(a.path).compareTo(path.basename(b.path)),
     );
 
+    final List<Track> tracks = [];
+    for (var i = 0; i < audioFiles.length; i++) {
+      final file = audioFiles[i];
+      final dur = await _getDuration(file.path) ?? Duration.zero;
+      final gradient = kGradients[i % kGradients.length];
+      tracks.add(
+        Track(
+          id: path.basenameWithoutExtension(file.path),
+          title: path.basenameWithoutExtension(file.path),
+          duration: dur,
+          gradientFrom: gradient[0],
+          gradientTo: gradient[1],
+          filePath: file.path,
+        ),
+      );
+    }
+
     setState(() {
-      _audioFiles = audioFiles;
+      _tracks = tracks;
       _currentIndex = -1;
       _isPlaying = false;
     });
 
-    // Create playlist
-    if (audioFiles.isNotEmpty) {
+    if (tracks.isNotEmpty) {
       final playlist = ConcatenatingAudioSource(
-        children: audioFiles
-            .map((file) => AudioSource.file(file.path))
-            .toList(),
+        children: tracks.map((t) => AudioSource.file(t.filePath)).toList(),
       );
-      await _audioPlayer.setAudioSource(
-        playlist,
-        initialIndex: 0,
-        initialPosition: Duration.zero,
-      );
+      await _audioPlayer.setAudioSource(playlist);
     }
   }
 
-  Future<void> _playAudio(int index) async {
-    if (index >= 0 && index < _audioFiles.length) {
-      await _audioPlayer.seek(Duration.zero, index: index);
-      await _audioPlayer.play();
-      setState(() {
-        _currentIndex = index;
-        _isPlaying = true;
-      });
-    }
-  }
-
-  Future<void> _pauseAudio() async {
-    await _audioPlayer.pause();
-    setState(() {
-      _isPlaying = false;
-    });
-  }
-
-  Future<void> _resumeAudio() async {
+  /// From a track object, move the player to that index and start
+  /// playing.
+  Future<void> _playTrack(Track track) async {
+    final idx = _tracks.indexWhere((t) => t.id == track.id);
+    if (idx == -1) return;
+    await _audioPlayer.seek(Duration.zero, index: idx);
     await _audioPlayer.play();
     setState(() {
+      _currentIndex = idx;
       _isPlaying = true;
     });
   }
 
-  Future<void> _nextAudio() async {
-    if (_currentIndex < _audioFiles.length - 1) {
-      await _audioPlayer.seekToNext();
+  void _togglePlayPause() {
+    if (_isPlaying) {
+      _audioPlayer.pause();
+    } else {
+      _audioPlayer.play();
     }
   }
 
-  Future<void> _previousAudio() async {
-    if (_currentIndex > 0) {
-      await _audioPlayer.seekToPrevious();
+  void _next() {
+    _audioPlayer.seekToNext();
+  }
+
+  void _prev() {
+    // if we're more than 3 seconds in restart current track
+    if (_progress > const Duration(seconds: 3)) {
+      _audioPlayer.seek(Duration.zero);
+    } else {
+      _audioPlayer.seekToPrevious();
     }
   }
 
-  String _formatDuration(Duration duration) {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    final minutes = twoDigits(duration.inMinutes.remainder(60));
-    final seconds = twoDigits(duration.inSeconds.remainder(60));
-    return '$minutes:$seconds';
+  void _seek(Duration d) {
+    _audioPlayer.seek(d);
+  }
+
+  void _toggleRepeat() {
+    final nextMode = _loopMode == LoopMode.off
+        ? LoopMode.all
+        : _loopMode == LoopMode.all
+        ? LoopMode.one
+        : LoopMode.off;
+    _audioPlayer.setLoopMode(nextMode);
+  }
+
+  void _toggleShuffle() {
+    final shouldShuffle = !_isShuffled;
+    _audioPlayer.setShuffleModeEnabled(shouldShuffle);
+    if (shouldShuffle) _audioPlayer.shuffle();
   }
 
   @override
   Widget build(BuildContext context) {
+    final currentTrack = _currentIndex >= 0 && _currentIndex < _tracks.length
+        ? _tracks[_currentIndex]
+        : null;
+
+    // Convert audio player's loop mode enum into UI repeat mode enum once
+    final RepeatMode currentRepeatMode = _loopMode == LoopMode.one
+        ? RepeatMode.one
+        : _loopMode == LoopMode.all
+        ? RepeatMode.all
+        : RepeatMode.off;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('مشغل القرآن الكريم'),
-        leading: const Icon(Icons.mosque, color: Colors.white),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: _pickFolder,
-            tooltip: 'اختر مجلد',
-          ),
-        ],
-      ),
-      body: Column(
+      body: Stack(
         children: [
-          if (_audioFiles.isNotEmpty && _currentIndex >= 0)
-            Container(
-              padding: const EdgeInsets.all(16),
-              color: const Color(0xFFE8F5E9),
-              child: Row(
-                children: [
-                  const Icon(Icons.music_note, color: Color(0xFF2E7D32)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'الآن يتم تشغيل: ${path.basename(_audioFiles[_currentIndex].path)}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1B5E20),
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
+          LibraryScreen(
+            tracks: _tracks,
+            currentTrack: currentTrack,
+            isPlaying: _isPlaying,
+            onTrackSelected: _playTrack,
+            onOpenNowPlaying: () => setState(() {
+              _showNowPlaying = true;
+            }),
+            onPickFolder: _pickFolder,
+          ),
+          // mini player with slide-in animation
+          if (currentTrack != null)
+            Positioned(
+              key: const ValueKey('mini'),
+              left: 0,
+              right: 0,
+              bottom: 16, // add extra space from bottom edge
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: !_showNowPlaying
+                    ? SafeArea(
+                        bottom: true,
+                        child: MiniPlayer(
+                          track: currentTrack,
+                          isPlaying: _isPlaying,
+                          progress: _progress,
+                          duration: _duration,
+                          onTogglePlay: _togglePlayPause,
+                          onNext: _next,
+                          onTap: () => setState(() {
+                            _showNowPlaying = true;
+                          }),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
               ),
             ),
-          Expanded(
-            child: _audioFiles.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.mosque,
-                          size: 80,
-                          color: Color(0xFF2E7D32),
+          // now-playing overlay appears from bottom and sticks near the bottom edge
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 400),
+            transitionBuilder: (child, animation) {
+              // slide in/out from bottom
+              final offset = Tween<Offset>(
+                begin: const Offset(0, 1),
+                end: Offset.zero,
+              ).animate(animation);
+              return SlideTransition(position: offset, child: child);
+            },
+            child: _showNowPlaying && currentTrack != null
+                ? Align(
+                    key: const ValueKey('nowplaying'),
+                    alignment: Alignment.bottomCenter,
+                    child: SafeArea(
+                      bottom: true,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 16.0),
+                        child: SizedBox(
+                          // keep most of the screen, but anchor from bottom
+                          height: MediaQuery.of(context).size.height * 0.85,
+                          child: NowPlayingScreen(
+                            track: currentTrack,
+                            progress: _progress,
+                            duration: _duration,
+                            isPlaying: _isPlaying,
+                            onClose: () => setState(() {
+                              _showNowPlaying = false;
+                            }),
+                            onTogglePlay: _togglePlayPause,
+                            onNext: _next,
+                            onPrev: _prev,
+                            repeatMode: currentRepeatMode,
+                            toggleRepeat: _toggleRepeat,
+                            isShuffled: _isShuffled,
+                            toggleShuffle: _toggleShuffle,
+                            onSeek: _seek,
+                          ),
                         ),
-                        const SizedBox(height: 20),
-                        const Text(
-                          'لم يتم العثور على ملفات صوتية. اختر مجلد يحتوي على ملفات القرآن.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 16),
-                        ),
-                      ],
+                      ),
                     ),
                   )
-                : ListView.builder(
-                    itemCount: _audioFiles.length,
-                    itemBuilder: (context, index) {
-                      String fileName = path.basename(_audioFiles[index].path);
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        elevation: 2,
-                        child: ListTile(
-                          leading: const Icon(
-                            Icons.audiotrack,
-                            color: Color(0xFF2E7D32),
-                          ),
-                          title: Text(
-                            fileName,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w500,
-                              color: Color(0xFF1B5E20),
-                            ),
-                          ),
-                          subtitle: Text(
-                            'سورة ${index + 1}',
-                            style: const TextStyle(color: Color(0xFF388E3C)),
-                          ),
-                          onTap: () => _playAudio(index),
-                          selected: index == _currentIndex,
-                          selectedTileColor: const Color(0xFFE8F5E8),
-                        ),
-                      );
-                    },
-                  ),
+                : const SizedBox.shrink(),
           ),
-          if (_audioFiles.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.all(16.0),
-              decoration: const BoxDecoration(
-                color: Color(0xFF2E7D32),
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(20),
-                  topRight: Radius.circular(20),
-                ),
-              ),
-              child: Column(
-                children: [
-                  // Progress indicator
-                  StreamBuilder<Duration?>(
-                    stream: _audioPlayer.positionStream,
-                    builder: (context, positionSnapshot) {
-                      final position = positionSnapshot.data ?? Duration.zero;
-                      return StreamBuilder<Duration?>(
-                        stream: _audioPlayer.durationStream,
-                        builder: (context, durationSnapshot) {
-                          final duration =
-                              durationSnapshot.data ?? Duration.zero;
-                          return Column(
-                            children: [
-                              Slider(
-                                value: duration.inSeconds > 0
-                                    ? position.inSeconds.toDouble()
-                                    : 0.0,
-                                max: duration.inSeconds.toDouble(),
-                                onChanged: duration.inSeconds > 0
-                                    ? (value) {
-                                        _audioPlayer.seek(
-                                          Duration(seconds: value.toInt()),
-                                        );
-                                      }
-                                    : null,
-                                activeColor: const Color(0xFFFFD700),
-                                inactiveColor: Colors.white.withOpacity(0.3),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16.0,
-                                ),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      _formatDuration(position),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    Text(
-                                      _formatDuration(duration),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  // Control buttons
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: const Icon(
-                          Icons.skip_previous,
-                          color: Colors.white,
-                        ),
-                        onPressed: _previousAudio,
-                        iconSize: 32,
-                      ),
-                      const SizedBox(width: 20),
-                      Container(
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFFFD700),
-                          shape: BoxShape.circle,
-                        ),
-                        child: IconButton(
-                          icon: Icon(
-                            _isPlaying ? Icons.pause : Icons.play_arrow,
-                            color: const Color(0xFF2E7D32),
-                          ),
-                          onPressed: _isPlaying ? _pauseAudio : _resumeAudio,
-                          iconSize: 40,
-                        ),
-                      ),
-                      const SizedBox(width: 20),
-                      IconButton(
-                        icon: const Icon(Icons.skip_next, color: Colors.white),
-                        onPressed: _nextAudio,
-                        iconSize: 32,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
     );
